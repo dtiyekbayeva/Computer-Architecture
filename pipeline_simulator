@@ -1,0 +1,406 @@
+import copy
+
+Opcodes_R,Opcodes_I, Opcodes_I_B = {0x0:"nop", 0x20:"add", 0x22:"sub"}, {0x23:"lw", 0x2b:"sw", 0x28:"sb", 0x20:"lb"}, {0x4: "beq", 0x5: "bne"}
+maskS1,maskS2Dst,maskDst,maskFunc,maskOpCode,maskOffset=0x03E00000,0x001F0000,0x0000F800,0x0000003F,0xFC000000,0x0000FFFF
+
+#Bitwise and and shift method
+def CalculateField(inst, mask, shift):
+    return (inst & mask) >> shift
+
+#offset
+def CalculateOffset(inst):
+    if (inst & maskOffset) >> 15 > 0:
+        offset = -2 ** 16 + (((inst & maskOffset) << 1) >> 1)
+        return offset
+    else:
+        offset = inst & maskOffset
+        return offset
+
+#Decoding Instruction
+def DecodeInstruction(inst):
+    opcode = CalculateField(inst, maskOpCode, 26)
+    if opcode == 0x0:
+        rs = CalculateField(inst, maskS1, 21)
+        rt = CalculateField(inst, maskS2Dst, 16)
+        rd = CalculateField(inst, maskDst, 11)
+        func = CalculateField(inst, maskFunc, 0)
+        return (Opcodes_R[func] + " $" + str(rd) +  ", $" + str(rs) + ", $" + str(rt))
+    elif opcode in Opcodes_I.keys():
+        rs = CalculateField(inst, maskS1, 21)
+        rt = CalculateField(inst, maskS2Dst, 16)
+        offset = CalculateOffset(inst)
+        return (Opcodes_I[opcode] + " $" + str(rt) + ", " +str(offset) + ", ($" + str(rs) + ")")
+    elif opcode in Opcodes_I_B.keys():
+        rs = CalculateField(inst, maskS1, 21)
+        rt = CalculateField(inst, maskS2Dst, 16)
+        if (inst & maskOffset) >> 15 > 0:
+            offset = (-2 ** 16 + (((inst & maskOffset) << 1) >> 1)) >> 2
+        else:
+            offset = (inst & maskOffset) >> 2
+        return (Opcodes_I_B[opcode] + " $" + str(rs) + " $" + str(rt) + str(offset))
+
+#printing function in brackets
+def printinst(inst):
+    if CalculateField(inst, maskOpCode, 26) == 0x0:
+        if CalculateField(inst, maskFunc, 0) == 0x20:
+            return "add"
+        elif CalculateField(inst, maskFunc, 0) == 0x22:
+            return "sub"
+    elif CalculateField(inst, maskOpCode, 26) == 0x23:
+        return "lw"
+    elif CalculateField(inst, maskOpCode, 26) == 0x2b:
+        return "sw"
+    elif CalculateField(inst, maskOpCode, 26) == 0x28:
+        return "sb"
+    elif CalculateField(inst, maskOpCode, 26) == 0x20:
+        return "lb"
+    else:
+        return "nop"
+
+#classes and parameters
+class IF_ID(object):
+    def __init__(self, instruction, IncrPC):
+        self.instruction = instruction
+        self.IncrPC = IncrPC
+
+class ID_EX(object):
+    def __init__(self):
+        self.IncrPC = 0
+        self.instruction =0
+        self.ReadReg1Value = 0
+        self.ReadReg2Value = 0
+        self.SEOffset = 0
+        self.WriteReg_20_16 = 0
+        self.WriteReg_15_11 = 0
+        self.Function = 0
+
+        # Controls
+        self.RegDst = 0
+        self.ALUSrc = 0
+        self.ALUOp = 0
+        self.MemRead = 0
+        self.MemWrite = 0
+        self.Branch = 0
+        self.MemToReg = 0
+        self.RegWrite = 0
+
+class EX_MEM(object):
+    def __init__(self):
+        self.IncrPC = 0
+        self.instruction =0
+
+        self.CalcBTA = "X"
+        self.Zero = False
+        self.ALUResult = 0
+        self.sw_write_value = 0
+        self.WriteRegNum = 0
+        self.Function = 0
+
+        # Controls
+        self.RegDst = 0
+        self.ALUSrc = 0
+        self.ALUOp = 0
+        self.MemRead = 0
+        self.MemWrite = 0
+        self.Branch = 0
+        self.MemToReg = 0
+        self.RegWrite = 0
+
+class MEM_WB(object):
+    def __init__(self):
+        self.IncrPC = 0
+        self.instruction =0
+        self.sw_write_value = 0
+        self.lw_read_value = 0
+        self.ALUResult = 0
+        self.Function = 0
+
+        # Controls
+        self.RegDst = 0
+        self.ALUSrc = 0
+        self.ALUOp = 0
+        self.MemRead = 0
+        self.MemWrite = 0
+        self.Branch = 0
+        self.MemToReg = 0
+        self.RegWrite = 0
+
+#add, sub, sw, lw - fetch instruction, increment counter
+def IF_stage(instruction, IF_ID_W):
+    IF_ID_W.instruction = instruction
+    IF_ID_W.IncrPC = IF_ID_W.IncrPC + 0x4
+
+#add - determine that it is add and read bits 20_16 and 15_11
+#sub - determine that it is sub and read bits 20_16 and 15_11
+#sw - determine it is sw, read bits 20:16 and 25:21
+#lw - determine it is lw, read bits 20:16
+def ID_stage(IF_ID_R, ID_EX_W, Regs):
+    ID_EX_W.instruction = IF_ID_R.instruction
+    ID_EX_W.IncrPC = IF_ID_R.IncrPC
+    ID_EX_W.ReadReg1Value = Regs[CalculateField(IF_ID_R.instruction, maskS1, 21)]
+    Regs[CalculateField(IF_ID_R.instruction, maskS1, 21)]= ID_EX_W.ReadReg1Value + CalculateField(IF_ID_R.instruction, maskS1, 21)
+    ID_EX_W.ReadReg2Value = Regs[CalculateField(IF_ID_R.instruction, maskS2Dst, 16)]
+    Regs[CalculateField(IF_ID_R.instruction, maskS2Dst, 16)] = ID_EX_W.ReadReg2Value + CalculateField(IF_ID_R.instruction, maskS2Dst, 16)
+    ID_EX_W.WriteReg_20_16 = CalculateField(IF_ID_R.instruction, maskS2Dst, 16)
+    ID_EX_W.WriteReg_15_11 = CalculateField(IF_ID_R.instruction, maskDst, 11)
+    ID_EX_W.SEOffset = CalculateOffset(IF_ID_R.instruction)
+
+    if ID_EX_W.instruction != 0:
+        opcode = (ID_EX_W.instruction & maskOpCode) >> 26
+        if opcode == 0:  # R type add or sub
+            ID_EX_W.SEOffset = 0
+            ID_EX_W.RegDst = 1
+            ID_EX_W.ALUOp = 10
+            ID_EX_W.ALUSrc = 0
+            ID_EX_W.Branch = 0
+            ID_EX_W.MemRead = 0
+            ID_EX_W.MemWrite = 0
+            ID_EX_W.RegWrite = 1
+            ID_EX_W.MemToReg = 0
+
+            if (CalculateField(ID_EX_W.instruction, maskFunc, 0)) == 0x20: #add
+                ID_EX_W.Function = 0x20
+            elif (CalculateField(ID_EX_W.instruction, maskFunc, 0)) == 0x23: #sub
+                ID_EX_W.Function = 0x23
+
+        elif opcode == 0x23 or opcode == 0x20:  # I type lw
+            ID_EX_W.RegDst = 0
+            ID_EX_W.ALUOp = 00
+            ID_EX_W.ALUSrc = 1
+            ID_EX_W.Branch = 0
+            ID_EX_W.MemRead = 1
+            ID_EX_W.MemWrite = 0
+            ID_EX_W.MemToReg = 1
+            ID_EX_W.RegWrite = 1
+
+            ID_EX_W.Function = 0
+
+        elif opcode == 0x2b or opcode == 0x28:  # I type sw
+
+            ID_EX_W.RegDst = "X"
+            ID_EX_W.ALUOp = 00
+            ID_EX_W.ALUSrc = 1
+            ID_EX_W.Branch = 0
+            ID_EX_W.MemRead = 0
+            ID_EX_W.MemWrite = 1
+            ID_EX_W.RegWrite = 0
+            ID_EX_W.MemToReg = "X"
+
+            ID_EX_W.Function = 0
+    else:
+        ID_EX_W.ReadReg1Value = 0
+        ID_EX_W.ReadReg2Value = 0
+        ID_EX_W.SEOffset = 0
+        ID_EX_W.WriteReg_20_16 = 0
+        ID_EX_W.WriteReg_15_11 = 0
+        ID_EX_W.Function = 0x0
+        ID_EX_W.RegDst = 0
+        ID_EX_W.ALUSrc = 0
+        ID_EX_W.ALUOp = 0
+        ID_EX_W.MemRead = 0
+        ID_EX_W.MemWrite = 0
+        ID_EX_W.Branch = 0
+        ID_EX_W.MemToReg = 0
+        ID_EX_W.RegWrite = 0
+
+#add - add values of bits 20_16 and 15_11
+#sub - subtract bits 20_16 - 15_11
+#sw - add offset bits 15:0 to value im Reg[bits 20:16] to compute address
+#lw - add offset bits 15:0 to value im Reg[bits 20:16] to compute address
+def EX_stage(ID_EX_R, EX_MEM_W, Regs):
+    EX_MEM_W.instruction = ID_EX_R.instruction
+    EX_MEM_W.IncrPC = ID_EX_R.IncrPC
+    EX_MEM_W.Function = ID_EX_R.Function
+
+    EX_MEM_W.RegDst = ID_EX_R.RegDst
+    EX_MEM_W.ALUOp = ID_EX_R.ALUOp
+    EX_MEM_W.ALUSrc = ID_EX_R.ALUSrc
+    EX_MEM_W.Branch = ID_EX_R.Branch
+    EX_MEM_W.MemRead = ID_EX_R.MemRead
+    EX_MEM_W.MemWrite = ID_EX_R.MemWrite
+    EX_MEM_W.RegWrite = ID_EX_R.RegWrite
+    EX_MEM_W.MemToReg = ID_EX_R.MemToReg
+    EX_MEM_W.sw_write_value = ID_EX_R.ReadReg2Value
+    if EX_MEM_W.RegDst == 1 and EX_MEM_W.ALUOp == 10 and EX_MEM_W.Function == 0x20:
+        EX_MEM_W.ALUResult = ID_EX_R.ReadReg1Value + ID_EX_R.ReadReg2Value
+        EX_MEM_W.WriteRegNum = ID_EX_R.WriteReg_15_11
+        EX_MEM_W.sw_write_value = ID_EX_R.ReadReg2Value
+    elif EX_MEM_W.RegDst == 1 and EX_MEM_W.ALUOp == 10 and EX_MEM_W.Function == 0x22:
+        EX_MEM_W.ALUResult = ID_EX_R.ReadReg1Value - ID_EX_R.ReadReg2Value
+        EX_MEM_W.WriteRegNum = ID_EX_R.WriteReg_15_11
+    elif EX_MEM_W.RegDst == 0 and EX_MEM_W.ALUOp == 00:
+        EX_MEM_W.ALUResult = ID_EX_R.ReadReg1Value + ID_EX_R.SEOffset
+        EX_MEM_W.sw_write_value = ID_EX_R.ReadReg2Value
+        EX_MEM_W.WriteRegNum = ID_EX_R.WriteReg_20_16
+
+#add - idle
+#sub - idle
+#sw - write value of Reg[bits 25:21] into memory address computed in EX_stage
+#lw - read value of Reg[bits 25:21] from memory address computed in EX_stage
+def MEM_stage(EX_MEM_R, MEM_WB_W, Regs):
+    MEM_WB_W.instruction = EX_MEM_R.instruction
+    MEM_WB_W.IncrPC = EX_MEM_R.IncrPC
+
+    MEM_WB_W.Branch = EX_MEM_R.Branch
+    MEM_WB_W.MemRead = EX_MEM_R.MemRead
+    MEM_WB_W.MemWrite = EX_MEM_R.MemWrite
+
+    MEM_WB_W.WriteRegNum = EX_MEM_R.WriteRegNum
+    MEM_WB_W.ALUResult = EX_MEM_R.ALUResult
+    MEM_WB_W.sw_write_value = EX_MEM_R.sw_write_value
+    MEM_WB_W.Function = EX_MEM_R.Function
+    if MEM_WB_W.MemRead == 1: #lw
+        MEM_WB_W.lw_read_value = Main_Mem[MEM_WB_W.ALUResult][1]
+    elif MEM_WB_W.MemWrite == 1: #sw
+        Main_Mem[MEM_WB_W.ALUResult][1] = EX_MEM_W.sw_write_value & 0xff
+
+#add - write result of EX_stage ro Regs[bits 25:21]
+#sub - write result of EX_stage ro Regs[bits 25:21]
+#sw - idle
+#lw - write value read in MEM_stage into Reg[bits 25:21]
+def WB_stage(MEM_WB_R, Regs, Main_Mem):
+
+    if MEM_WB_R.RegWrite == 1 and MEM_WB_R.MemToReg == 1:  # lw
+        Regs[MEM_WB_R.WriteRegNum] = MEM_WB_R.lw_read_value
+    elif MEM_WB_R.RegWrite == 1 and MEM_WB_R.MemToReg == 0:  # R format
+        Regs[MEM_WB_R.WriteRegNum] = MEM_WB_R.ALUResult
+
+clock_cycle=0 - 1
+
+def Print_out_everything(Regs, IF_ID_W, IF_ID_R, ID_EX_W, ID_EX_R, EX_MEM_W, EX_MEM_R, MEM_WB_W, MEM_WB_R):
+    print "Clock Cycle %s (Before we copy the write side of pipeline registers to the read side)\n" \
+           %(clock_cycle)
+    print("Registers: ")
+    for i in range(0, 8):
+        print "$%02d=%x  " %(i, Regs[i]),
+    print
+    for i in range(8, 16):
+        print "$%02d=%x  " %(i, Regs[i]),
+    print
+    for i in range(16, 24):
+        print "$%02d=%x  " %(i, Regs[i]),
+    print
+    for i in range(24, 32):
+        print "$%02d=%x  " %(i, Regs[i]),
+    print "\n"
+    # IF/ID_Write (written to by the IF stage)
+    print"IF/ID_Write (written to by the IF stage)"
+    if IF_ID_W.instruction == 0:
+        print "Inst = 0x00000000\n"
+    else:
+        print "Inst=0x%08x     [%s]      IncrPC=0x%08x\n" %(IF_ID_W.instruction, DecodeInstruction(instruction), IF_ID_W.IncrPC)
+
+    # IF/ID_Read (read by the ID stage)
+    print "IF/ID_Read (read by the ID stage)"
+    if IF_ID_R.instruction == 0:
+        print "Inst = 0x00000000\n"
+    else:
+        print "Inst=0x%08x     [%s]      IncrPC=0x%08x\n" %(IF_ID_R.instruction, DecodeInstruction(IF_ID_R.instruction), IF_ID_R.IncrPC)
+    # ID/EX_Write (written to by the ID stage)
+    print "ID/EX_Write (written to by the ID stage)"
+    if ID_EX_W.instruction == 0:
+        print "Control = 00000000\n"
+    else:
+        print "Control: RegDst=%s, ALUSrc=%s, ALUOp=%s, MemRead=%s, MemWrite=%s,\n" \
+              "Branch=%s, MemToReg=%s, RegWrite=%s     [%s]\n\n" \
+              "IncrPC=%x, ReadReg1Value=%x, ReadReg2Value=%x\n" \
+              "SEOffset=%x, WriteReg_20_16=%s, WriteReg_15_11=%s, Function=%x\n" \
+              %(ID_EX_W.RegDst, ID_EX_W.ALUSrc, ID_EX_W.ALUOp, ID_EX_W.MemRead, ID_EX_W.MemWrite,
+                ID_EX_W.Branch, ID_EX_W.MemToReg, ID_EX_W.RegWrite, printinst(ID_EX_W.instruction),
+                ID_EX_W.IncrPC, ID_EX_W.ReadReg1Value, ID_EX_W.ReadReg2Value,
+                ID_EX_W.SEOffset, ID_EX_W.WriteReg_20_16, ID_EX_W.WriteReg_15_11, ID_EX_W.Function)
+    # ID/EX_Read (read by the EX stage)
+    print "ID/EX_Read (read by the EX stage)"
+    if ID_EX_R.instruction == 0:
+        print "Control = 00000000\n"
+    else:
+        print "Control: RegDst=%s, ALUSrc=%s, ALUOp=%s, MemRead=%s, MemWrite=%s\n" \
+              "Branch=%s, MemToReg=%s, RegWrite=%s     [%s]\n\n" \
+              "IncrPC=%x, ReadReg1Value=%x, ReadReg2Value=%x\n" \
+              "SEOffset=%x, WriteReg_20_16=%s, WriteReg_15_11=%s, Function=%x\n" \
+              %(ID_EX_R.RegDst, ID_EX_R.ALUSrc, ID_EX_R.ALUOp, ID_EX_R.MemRead, ID_EX_R.MemWrite,
+                ID_EX_R.Branch, ID_EX_R.MemToReg, ID_EX_R.RegWrite, printinst(ID_EX_R.instruction),
+                ID_EX_R.IncrPC, ID_EX_R.ReadReg1Value, ID_EX_R.ReadReg2Value,
+                ID_EX_R.SEOffset, ID_EX_R.WriteReg_20_16, ID_EX_R.WriteReg_15_11, ID_EX_R.Function)
+
+    # EX/MEM_Write (written to by the EX stage)
+    print "EX/MEM_Write (written to by the EX stage)"
+    if EX_MEM_W.instruction == 0:
+        print "Control = 00000000\n"
+    else:
+        print "Control: MemRead=%s, MemWrite=%s, Branch=%s, MemToReg=%s, RegWrite=%s,    [%s]\n"\
+              "CalcBTA=%s, Zero=%s, ALUResult=%x\n\n" \
+              "SWValue=%x, WriteRegNum=%s\n" \
+              %(EX_MEM_W.MemRead, EX_MEM_W.MemWrite, EX_MEM_W.Branch, EX_MEM_W.MemToReg,EX_MEM_W.RegWrite, printinst(EX_MEM_W.instruction),
+                EX_MEM_W.CalcBTA, EX_MEM_W.Zero, EX_MEM_W.ALUResult,
+                EX_MEM_W.sw_write_value, EX_MEM_W.WriteRegNum)
+    # EX/MEM_Read (read by the MEM stage)
+    print "EX/MEM_Read (read by the MEM stage)"
+    if EX_MEM_R.instruction == 0:
+        print "Control = 00000000\n"
+    else:
+        print "Control: MemRead=%s, MemWrite=%s, Branch=%s, MemToReg=%s, RegWrite=%s,    [%s]\n"\
+              "CalcBTA=%s, Zero=%s, ALUResult=%x\n\n" \
+              "SWValue=%x, WriteRegNum=%s\n" \
+              %(EX_MEM_R.MemRead, EX_MEM_R.MemWrite, EX_MEM_R.Branch, EX_MEM_R.MemToReg,EX_MEM_R.RegWrite, printinst(EX_MEM_R.instruction),
+                EX_MEM_R.CalcBTA, EX_MEM_R.Zero, EX_MEM_R.ALUResult, \
+                EX_MEM_R.sw_write_value, EX_MEM_R.WriteRegNum)
+    # MEM/WB_Write (written to by the MEM stage)
+    print "MEM/WB_Write (written to by the MEM stage)"
+    if MEM_WB_W.instruction == 0:
+        print "Control = 00000000\n"
+    else:
+        print "Control: MemToReg=%s, RegWrite=%s,      [%s]\n" \
+              "LWDataValue=%s, ALUResult=%x, WriteRegNum=%s\n"\
+              %(MEM_WB_W.MemToReg, MEM_WB_W.RegWrite, printinst(EX_MEM_W.instruction),\
+                MEM_WB_W.lw_read_value, MEM_WB_W.ALUResult, MEM_WB_W.WriteRegNum)
+    # MEM/WB (read by the WB stage)
+    print "MEM/WB (read by the WB stage)"
+    if MEM_WB_R.instruction == 0:
+        print"Control = 00000000\n"
+    else:
+        print "Control: MemToReg=%s, RegWrite=%s,      [%s]\n" \
+              "LWDataValue=%s, ALUResult=%x, WriteRegNum=%s\n"\
+              %(MEM_WB_R.MemToReg, MEM_WB_R.RegWrite, printinst(MEM_WB_R.instruction),
+                MEM_WB_R.lw_read_value, MEM_WB_R.ALUResult, MEM_WB_R.WriteRegNum)
+# Initialize Main_Mem
+Main_Mem = []
+for i in range(0x0, 0x400):
+    Main_Mem.append([hex(i), hex(i & 0xff)])
+
+def Print_Main_Mem(Main_Mem):
+    for i in range(0, len(Main_Mem), 0x10):
+        print "beginning at address %s: %s " %((Main_Mem[i][0]), [Main_Mem[j][1] for j in range(i,i+0x10)])
+#32 registers
+Regs = [0x0]
+for reg in range(1, 32):
+     Regs.append(0x100 + reg)
+
+instructions = [0x00000000, 0xA1020000, 0x810AFFFC, 0x00831820, 0x01263820, 0x01224820, 0x81180000, 0x81510010, 0x00624022, 0x00000000, 0x00000000, 0x00000000, 0x00000000]
+#instructions = [0x00000000, 0x00a63820, 0x8d0f0004, 0xad09fffc, 0x00625022, 0x10c8fffb, 0x00000000, 0x00000000, 0x00000000, 0x00000000]
+
+address = 0x7A000 - 4
+
+IF_ID_W = IF_ID(0x0, address)
+IF_ID_R = IF_ID(0x0, 0x0)
+ID_EX_W = ID_EX()
+ID_EX_R = ID_EX()
+EX_MEM_W = EX_MEM()
+EX_MEM_R = EX_MEM()
+MEM_WB_W = MEM_WB()
+MEM_WB_R = MEM_WB()
+
+#loop
+for instruction in instructions:
+    clock_cycle +=1
+    IF_stage(instruction, IF_ID_W)
+    ID_stage(IF_ID_R, ID_EX_W, Regs)
+    EX_stage(ID_EX_R, EX_MEM_W, Regs)
+    MEM_stage(EX_MEM_R, MEM_WB_W, Regs)
+    WB_stage(MEM_WB_R, Regs, Main_Mem)
+    Print_out_everything(Regs, IF_ID_W, IF_ID_R, ID_EX_W, ID_EX_R, EX_MEM_W, EX_MEM_R, MEM_WB_W, MEM_WB_R)
+    IF_ID_R = copy.deepcopy(IF_ID_W)
+    ID_EX_R = copy.deepcopy(ID_EX_W)
+    EX_MEM_R = copy.deepcopy(EX_MEM_W)
+    MEM_WB_R = copy.deepcopy(MEM_WB_W)
+Print_Main_Mem(Main_Mem)
